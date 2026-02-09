@@ -1,0 +1,20 @@
+{
+  "theme": {
+    "primaryColor": "#1a1a1a",
+    "headerBackground": "#1a1a1a",
+    "headerTextColor": "#fff"
+  },
+  "company": {
+    "title": "Zyenra Security",
+    "report_heading": "Software Dependency Security Analysis Report",
+    "logo_link": "https://www.zyenra.com/assets/img/logo.png",
+    "logo_link_footer": "https://www.zyenra.com/assets/img/logo.png",
+    "favicon_link": "https://www.zyenra.com/favicon.ico",
+    "website": "https://www.zyenra.com"
+  },
+  "report": {
+    "title": "Software Dependency Security Analysis Report",
+    "description": "Security vulnerability analysis report for Zyenra Security dependencies",
+    "footer": "All Rights Reserved - Zyenra Security \n www.zyenra.com"
+  }
+}

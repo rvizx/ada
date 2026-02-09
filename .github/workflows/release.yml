@@ -1,0 +1,149 @@
+name: Build and Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release version (e.g., v1.0.0)'
+        required: true
+        default: 'v1.0.0'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        go-version: [1.24, 1.25]
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Go
+      uses: actions/setup-go@v4
+      with:
+        go-version: ${{ matrix.go-version }}
+
+    - name: Build binary
+      shell: bash
+      run: |
+        VERSION=${{ github.ref_name }}
+        if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+          VERSION=${{ github.event_inputs.version }}
+        fi
+
+        OUTPUT="ada-linux-amd64"
+
+        echo "Building from ./cmd/ada"
+        go build -ldflags="-s -w -X main.Version=${VERSION}" -o ${OUTPUT} ./cmd/ada
+
+        # create checksum with hash only
+        sha256sum ${OUTPUT} | awk '{print $1}' > ${OUTPUT}.sha256
+
+        echo "=== Binary Information ==="
+        echo "File: ${OUTPUT}"
+        echo "Size: $(ls -lh ${OUTPUT} | awk '{print $5}')"
+        echo "Go Version: $(go version)"
+        echo "Checksum: $(cat ${OUTPUT}.sha256)"
+        echo "========================"
+
+    - name: Upload artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: ada-linux-${{ matrix.go-version }}
+        path: |
+          ada-linux-amd64
+          ada-linux-amd64.sha256
+        retention-days: 30
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
+    permissions:
+      contents: write
+      packages: write
+      issues: write
+      pull-requests: write
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Download all artifacts
+      uses: actions/download-artifact@v4
+      with:
+        path: artifacts
+
+    - name: Create Release
+      id: create_release
+      uses: actions/create-release@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        tag_name: ${{ github.ref_name || github.event_inputs.version }}
+        release_name: Release ${{ github.ref_name || github.event_inputs.version }}
+        draft: false
+        prerelease: false
+
+    - name: Generate Release Notes
+      id: release_notes
+      shell: bash
+      run: |
+        VERSION="${{ github.ref_name || github.event_inputs.version }}"
+
+        # pick only one checksum file
+        DIGEST=$(cat $(find artifacts -name "ada-linux-amd64.sha256" -print -quit))
+
+        cat > release_notes.md << EOF
+        # ADA v${VERSION#v} Release
+
+        ## Binaries
+
+        ### Linux
+        - **ada-linux-amd64** - Linux x86_64 binary
+
+        ### Digests
+        \`\`\`
+        ada-linux-amd64 - ${DIGEST} (SHA256)
+        \`\`\`
+        EOF
+
+        echo "notes<<EOF" >> $GITHUB_OUTPUT
+        cat release_notes.md >> $GITHUB_OUTPUT
+        echo "EOF" >> $GITHUB_OUTPUT
+
+    - name: Upload Release Assets
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        VERSION="${{ github.ref_name || github.event_inputs.version }}"
+
+        BIN_FILE=$(find artifacts -name "ada-linux-amd64" -type f -print -quit)
+        CHECKSUM_FILE="${BIN_FILE}.sha256"
+
+        echo "Uploading: $BIN_FILE"
+        gh release upload "$VERSION" "$BIN_FILE" --clobber
+
+        if [ -f "$CHECKSUM_FILE" ]; then
+          gh release upload "$VERSION" "$CHECKSUM_FILE" --clobber
+        fi
+
+    - name: Update Release Description
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        VERSION="${{ github.ref_name || github.event_inputs.version }}"
+        gh release edit "$VERSION" --notes-file release_notes.md
+
+    - name: Show Release Summary
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        VERSION="${{ github.ref_name || github.event_inputs.version }}"
+        echo "Release $VERSION created successfully!"
+        echo "Assets uploaded:"
+        gh release view "$VERSION" --json assets --jq '.assets[].name'

@@ -1,0 +1,82 @@
+name: Build and Test
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        go-version: [1.24, 1.25]
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Go
+      uses: actions/setup-go@v4
+      with:
+        go-version: ${{ matrix.go-version }}
+
+    - name: Verify dependencies
+      run: go mod verify
+
+    - name: Build binary
+      shell: bash
+      run: |
+        # Debug: Show current directory and contents
+        echo "=== Debug Info ==="
+        pwd
+        ls -la
+        echo "=== Go Module Info ==="
+        go mod why
+        echo "=== Repository Structure ==="
+        find . -name "*.go" -type f | head -10
+        echo "========================"
+        
+        # Build for current platform
+        if [[ "$RUNNER_OS" == "Windows" ]]; then
+          OUTPUT="ada.exe"
+        else
+          OUTPUT="ada"
+        fi
+        
+        # Build with version info - use relative path from current directory
+        echo "Building from ./cmd/ada"
+        go build -ldflags="-s -w -X main.Version=dev" -o ${OUTPUT} ./cmd/ada
+        
+        # Show binary info
+        echo "=== Binary Information ==="
+        echo "File: ${OUTPUT}"
+        echo "Size: $(ls -lh ${OUTPUT} | awk '{print $5}')"
+        echo "Go Version: $(go version)"
+        echo "OS: $RUNNER_OS"
+        echo "Architecture: $(uname -m || echo 'Windows')"
+        echo "========================"
+
+    - name: Test binary
+      shell: bash
+      run: |
+        if [[ "$RUNNER_OS" == "Windows" ]]; then
+          OUTPUT="ada.exe"
+        else
+          OUTPUT="ada"
+        fi
+        
+        # Test version flag
+        ./${OUTPUT} --version
+        
+        # Test help flag
+        ./${OUTPUT} --help
+
+    - name: Upload build artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: ada-${{ matrix.os }}-${{ matrix.go-version }}
+        path: ada*
+        retention-days: 1
