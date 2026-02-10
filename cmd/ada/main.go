@@ -21,6 +21,11 @@ func printUsage() {
 	fmt.Println("  ada audit --html                       generate html report only")
 	fmt.Println("  ada audit --help                       show this help message")
 	fmt.Println("")
+	fmt.Println("  ada collect --source <dir> --out <dir>  collect dependency files from source")
+	fmt.Println("")
+	fmt.Println("  ada osv --manifest <file>               scan vendored libs via OSV.dev")
+	fmt.Println("  ada osv --manifest <file> --json        also output merged json")
+	fmt.Println("")
 	fmt.Println("  ada report --from-json <file>           generate html report from existing json")
 	fmt.Println("  ada report --from-json <f1> <f2> ...    merge multiple jsons into one html report")
 	fmt.Println("  ada report --from-json <f1> --json      also output merged json")
@@ -55,6 +60,10 @@ func main() {
 	switch args[0] {
 	case "audit":
 		runAuditCommand(args[1:])
+	case "collect":
+		runCollectCommand(args[1:])
+	case "osv":
+		runOSVCommand(args[1:])
 	case "report":
 		runReportCommand(args[1:])
 	default:
@@ -163,6 +172,175 @@ func runAuditCommand(args []string) {
 	// ensure at least one report was generated
 	if reportsGenerated == 0 {
 		log.Fatal("[!] no reports were generated successfully")
+	}
+}
+
+// runCollectCommand handles: ada collect --source <dir> --out <dir>
+func runCollectCommand(args []string) {
+	var sourceDir string
+	var outDir string
+
+	i := 0
+	for i < len(args) {
+		switch args[i] {
+		case "--source", "-s":
+			if i+1 < len(args) {
+				sourceDir = args[i+1]
+				i += 2
+				continue
+			}
+			fmt.Println("[!] --source requires a directory path")
+			os.Exit(1)
+		case "--out", "-o":
+			if i+1 < len(args) {
+				outDir = args[i+1]
+				i += 2
+				continue
+			}
+			fmt.Println("[!] --out requires a directory path")
+			os.Exit(1)
+		case "--help":
+			fmt.Println("usage: ada collect --source <source-dir> --out <output-dir>")
+			fmt.Println("")
+			fmt.Println("Walks the source directory, finds dependency manifest and lock files,")
+			fmt.Println("copies them to the output directory preserving structure, and classifies")
+			fmt.Println("each target as scannable or vendored/bundled.")
+			fmt.Println("")
+			fmt.Println("Output: ada-collect-manifest.json in the output directory")
+			os.Exit(0)
+		default:
+			fmt.Printf("[!] unknown flag: %s\n", args[i])
+			fmt.Println("Use 'ada collect --help' for usage information")
+			os.Exit(1)
+		}
+		i++
+	}
+
+	if sourceDir == "" {
+		fmt.Println("[!] --source is required")
+		fmt.Println("usage: ada collect --source <source-dir> --out <output-dir>")
+		os.Exit(1)
+	}
+	if outDir == "" {
+		fmt.Println("[!] --out is required")
+		fmt.Println("usage: ada collect --source <source-dir> --out <output-dir>")
+		os.Exit(1)
+	}
+
+	fmt.Printf("[>] collecting dependency files from: %s\n", sourceDir)
+	fmt.Printf("[>] output directory: %s\n", outDir)
+
+	result, err := internal.CollectDependencyFiles(sourceDir, outDir)
+	if err != nil {
+		log.Fatalf("[!] collect failed: %v", err)
+	}
+
+	internal.PrintCollectSummary(result)
+}
+
+// runOSVCommand handles: ada osv --manifest <file> [--json] [--html]
+func runOSVCommand(args []string) {
+	var manifestPath string
+	var jsonOutput bool
+	var htmlOutput bool
+
+	i := 0
+	for i < len(args) {
+		switch args[i] {
+		case "--manifest", "-m":
+			if i+1 < len(args) {
+				manifestPath = args[i+1]
+				i += 2
+				continue
+			}
+			fmt.Println("[!] --manifest requires a file path")
+			os.Exit(1)
+		case "--json", "-j":
+			jsonOutput = true
+		case "--html", "-h":
+			htmlOutput = true
+		case "--help":
+			fmt.Println("usage: ada osv --manifest <ada-collect-manifest.json> [--json] [--html]")
+			fmt.Println("")
+			fmt.Println("Reads the collect manifest, queries OSV.dev for each vendored library,")
+			fmt.Println("and produces a vulnerability report compatible with 'ada report --from-json'.")
+			fmt.Println("")
+			fmt.Println("flags:")
+			fmt.Println("  --json    output JSON report (ada-osv-report.json)")
+			fmt.Println("  --html    output HTML report")
+			fmt.Println("  (default: --json)")
+			os.Exit(0)
+		default:
+			fmt.Printf("[!] unknown flag: %s\n", args[i])
+			fmt.Println("Use 'ada osv --help' for usage information")
+			os.Exit(1)
+		}
+		i++
+	}
+
+	if manifestPath == "" {
+		fmt.Println("[!] --manifest is required")
+		fmt.Println("usage: ada osv --manifest <ada-collect-manifest.json> [--json] [--html]")
+		os.Exit(1)
+	}
+
+	// Default to JSON output
+	if !jsonOutput && !htmlOutput {
+		jsonOutput = true
+	}
+
+	fmt.Printf("[>] reading collect manifest: %s\n", manifestPath)
+
+	collectResult, err := internal.ReadCollectManifest(manifestPath)
+	if err != nil {
+		log.Fatalf("[!] failed to read manifest: %v", err)
+	}
+
+	// Count vendored targets
+	vendoredCount := 0
+	for _, t := range collectResult.Targets {
+		if !t.Scannable {
+			vendoredCount++
+		}
+	}
+
+	if vendoredCount == 0 {
+		fmt.Println("[>] no vendored targets found — nothing to scan via OSV")
+		os.Exit(0)
+	}
+
+	fmt.Printf("[>] found %d vendored targets to check against OSV.dev\n", vendoredCount)
+
+	auditResult, err := internal.ScanVendoredTargets(collectResult)
+	if err != nil {
+		log.Fatalf("[!] OSV scan failed: %v", err)
+	}
+
+	if auditResult.Summary.TotalVulnerabilities == 0 {
+		fmt.Println("[>] no vulnerabilities found in vendored dependencies — all clean!")
+
+		if jsonOutput {
+			// Still write an empty result file so the pipeline can merge it
+			if err := internal.GenerateOSVJSONReport(auditResult); err != nil {
+				log.Fatalf("[!] failed to write JSON: %v", err)
+			}
+		}
+		os.Exit(0)
+	}
+
+	// Generate reports
+	if jsonOutput {
+		if err := internal.GenerateOSVJSONReport(auditResult); err != nil {
+			log.Fatalf("[!] failed to generate JSON report: %v", err)
+		}
+		fmt.Println("[>] osv json report generated successfully")
+	}
+
+	if htmlOutput {
+		if err := internal.GenerateHTMLReport(auditResult); err != nil {
+			log.Fatalf("[!] failed to generate HTML report: %v", err)
+		}
+		fmt.Println("[>] osv html report generated successfully")
 	}
 }
 
