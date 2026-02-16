@@ -1,81 +1,99 @@
 # Ada - Audit Aggregator
 
-### Description
-
-ADA (Audit Aggregator) is a comprehensive security vulnerability scanning tool that automatically detects and aggregates audit results from multiple package managers. It intelligently identifies project types based on configuration files and runs appropriate security audits using built-in parsers for JSON outputs.
-
+ADA is a security vulnerability aggregation tool that detects, audits, and consolidates dependency security findings from multiple package managers and external scanners into unified branded reports.
 
 <div align="center">
   <img width="650" src="https://github.com/user-attachments/assets/65e7d21d-5d19-46cc-8ddf-775ed9675355" alt="sample"> <br><br>
 </div>
 
-The tool seamlessly handles npm audit, composer audit, and other audit tools individually or in combination, creating unified security reports. ADA automatically installs missing audit tools in temporary locations when needed, ensuring developers and security analysts can focus on results rather than tool setup.
-
 ### Features
 
 - **Multi-Project Detection**: Automatically identifies npm, Composer, and other project types
-- **Intelligent Tool Management**: Installs missing audit tools temporarily for the audit report and cleans up automatically
-- **Unified Reporting**: Combines multiple audit results into single comprehensive reports
-- **Custom Branding**: Fully configurable company theming and logo placement with user-specific configuration
-- **User Configuration**: Support for `~/.config/ada.config` with automatic fallback to embedded defaults
-- **Professional Output**: Generates both JSON and HTML reports with enterprise-grade styling
-- **Zero Dependencies**: Self-contained binary with embedded configuration
+- **External Scanner Support**: Consumes JSON output from Snyk, npm audit, composer audit, and merges them into a single report
+- **Dependency Collection**: Walks source trees to find and classify dependency manifests (scannable vs vendored)
+- **OSV.dev Integration**: Queries OSV.dev for vulnerabilities in vendored/bundled dependencies
+- **Report Merging**: Consolidates multiple scan results into one unified HTML/JSON report
+- **Custom Branding**: Configurable company theming, logos, and colors via `~/.config/ada.config`
+- **Zero Dependencies**: Self-contained Go binary with embedded default configuration
 
-### Prerequisites
+### Installation
 
-- **Go 1.24 or later** (tested with Go 1.24.6)
-- **Git** for cloning the repository
-- **npm** and **composer** (optional - ADA will attempt to install them if missing)
-
-
-
-### Installation & Building
-
-**1. Clone the Repository**
 ```bash
 git clone https://github.com/rvizx/ada.git
 cd ada
-```
-
-**2. Build the Binary**
-```bash
 go build -o ada ./cmd/ada
+sudo mv ada /usr/local/bin/ada
 ```
 
-**3. Install System-Wide (Optional)**
-```bash
-sudo cp ada /usr/local/bin/ada
-sudo chmod +x /usr/local/bin/ada
-```
+**Prerequisites**: Go 1.24+
 
+### Commands
 
-### Usage
+#### `ada audit` — Run security audits directly
 
-**Executing ADA**
-Navigate to any repository you want to audit:
+Navigate to a project directory and run audits. Ada auto-detects project types (npm, Composer, etc.) and runs the appropriate audit tools.
 
 ```bash
-ada audit          # Generate both JSON and HTML reports
-ada audit --json   # JSON report only
-ada audit --html   # HTML report only
-ada audit --help   # Show help message
+ada audit              # Generate both JSON and HTML reports
+ada audit --json       # JSON only
+ada audit --html       # HTML only
 ```
 
+**Output**: `ada-audit-report.json`, `ada-report.html`
+
+#### `ada report --from-json` — Generate reports from external scanner output
+
+Consume JSON output from external scanners (e.g., Snyk) and generate consolidated branded reports. Auto-detects the input format.
+
+```bash
+ada report --from-json scan-results.json --html             # Single file → HTML
+ada report --from-json scan1.json scan2.json --html --json  # Merge multiple → HTML + JSON
+```
+
+This is the primary integration point for CI/CD pipelines where scanning is handled by tools like Snyk, and Ada handles report generation.
+
+**Output**: `ada-report.html`, `ada-audit-report.json`
+
+#### `ada collect` — Collect dependency manifests from source
+
+Walks a source directory, finds dependency manifest and lock files, copies them preserving structure, and classifies each target as scannable or vendored/bundled.
+
+```bash
+ada collect --source ./repo --out ./deps
+```
+
+**Output**: `ada-collect-manifest.json` in the output directory
+
+#### `ada osv` — Scan vendored dependencies via OSV.dev
+
+Reads a collect manifest and queries [OSV.dev](https://osv.dev) for known vulnerabilities in vendored libraries. Output is compatible with `ada report --from-json`.
+
+```bash
+ada osv --manifest ada-collect-manifest.json           # JSON report (default)
+ada osv --manifest ada-collect-manifest.json --html    # HTML report
+```
+
+**Output**: `ada-osv-report.json`
+
+### CI/CD Integration
+
+Ada is designed to plug into CI/CD pipelines as the report consolidation layer. A typical flow:
+
+```
+Scanner (Snyk/npm audit/etc.)          Ada
+─────────────────────────────    ──────────────────────
+snyk test --json → result1.json ─┐
+snyk test --json → result2.json ─┼→ ada report --from-json *.json --html --json
+snyk test --json → result3.json ─┘         ↓
+                                    ada-report.html (branded)
+                                    ada-audit-report.json (machine-readable)
+```
 
 ### Configuration
 
-ADA supports two configuration methods:
+Create `~/.config/ada.config` to customize branding:
 
-#### 1. User Configuration (Recommended)
-
-Create a user-specific configuration file at `~/.config/ada.config` to customize branding and theming:
-
-```bash
-# Create the config directory if it doesn't exist
-mkdir -p ~/.config
-
-# Create your custom configuration
-cat > ~/.config/ada.config << 'EOF'
+```json
 {
   "theme": {
     "primaryColor": "#ff8f1a",
@@ -83,48 +101,38 @@ cat > ~/.config/ada.config << 'EOF'
     "headerTextColor": "#fff"
   },
   "company": {
-    "title": "Your Company Name",
-    "report_heading": "Software Dependency Security Analysis Report",
+    "title": "Your Company",
+    "report_heading": "Dependency Security Analysis Report",
     "logo_link": "https://yourcompany.com/logo.png",
     "favicon_link": "https://yourcompany.com/favicon.ico",
     "website": "https://yourcompany.com"
   },
   "report": {
-    "title": "Software Dependency Security Analysis Report",
-    "description": "Security vulnerability analysis report for Your Company dependencies"
+    "title": "Dependency Security Report",
+    "description": "Security vulnerability analysis for dependencies"
   }
 }
-EOF
 ```
 
-**Configuration Priority:**
-1. **User Config**: `~/.config/ada.config` (if exists)
-2. **Embedded Config**: Built-in default configuration (fallback) - currently set to zyenra
-
+Falls back to embedded defaults if no config file is present.
 
 ### Project Structure
 
 ```
 ada/
-├── cmd/ada/          # Main application entry point
-│   └── main.go       # Command-line interface and main logic
-├── internal/          # Internal packages (not importable)
-│   ├── config.go      # Configuration management and embedding
-│   ├── audit.go       # Security audit execution logic
-│   ├── project.go     # Project type detection and analysis
-│   ├── reports.go     # Report generation (JSON/HTML)
-│   └── config.json    # Embedded configuration file
-├── internal/config.json # Embedded configuration file
-├── go.mod             # Go module definition
-├── .gitignore         # Git ignore patterns
-└── README.md          # This file
+├── cmd/ada/           # CLI entry point
+│   └── main.go
+├── internal/          # Core logic
+│   ├── audit.go       # Audit execution
+│   ├── collect.go     # Dependency file collection
+│   ├── config.go      # Configuration management
+│   ├── config.json    # Embedded default config
+│   ├── osv.go         # OSV.dev integration
+│   ├── project.go     # Project type detection
+│   └── reports.go     # Report generation (JSON/HTML)
+├── go.mod
+└── README.md
 ```
-
-
-### Contribution
-
-Contributions are welcome! Please ensure code follows best practices and includes appropriate tests.
-
 
 ### Credits
 
